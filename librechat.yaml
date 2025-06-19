@@ -1,0 +1,32 @@
+version: 1.2.1
+cache: true
+endpoints:
+  azureOpenAI:
+    # Endpoint-level configuration
+    titleModel: "current_model"
+    groups:
+    # Group-level configuration
+    - group: "${AZINSTANCE_NAME}"
+      apiKey: "${AZOPENAI_API_KEY}"
+      instanceName: "${AZINSTANCE_NAME}"
+      version: "2025-01-01-preview"
+      # Model-level configuration
+      models:
+        gpt-4:
+          deploymentName: gpt-4
+          version: "2025-01-01-preview"
+        gpt-4-32k:
+          deploymentName: gpt-4-32k
+          version: "2025-01-01-preview"
+        gpt-4o:
+          deploymentName: gpt-4o
+          version: "2025-01-01-preview"
+        gpt-4o-mini:
+          deploymentName: gpt-4o-mini
+          version: "2025-01-01-preview"
+        o1:
+          deploymentName: o1
+          version: "2025-01-01-preview"
+        o3-mini:
+          deploymentName: o3-mini
+          version: "2025-01-01-preview"

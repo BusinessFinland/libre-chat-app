@@ -1,19 +1,13 @@
 import React, { useMemo } from 'react';
-import { useRecoilValue } from 'recoil';
-import { OGDialog, OGDialogTemplate } from '@librechat/client';
-import { EToolResources, defaultAgentCapabilities } from 'librechat-data-provider';
-import { ImageUpIcon, FileSearch, TerminalSquareIcon, FileType2Icon } from 'lucide-react';
-import {
-  useAgentToolPermissions,
-  useAgentCapabilities,
-  useGetAgentsConfig,
-  useLocalize,
-} from '~/hooks';
-import { ephemeralAgentByConvoId } from '~/store';
-import { useDragDropContext } from '~/Providers';
+import { EModelEndpoint, EToolResources } from 'librechat-data-provider';
+import { FileSearch, ImageUpIcon, FileType2Icon } from 'lucide-react';
+import OGDialogTemplate from '~/components/ui/OGDialogTemplate';
+import { useGetEndpointsQuery } from '~/data-provider';
+import useLocalize from '~/hooks/useLocalize';
+import { OGDialog } from '~/components/ui';
 
 interface DragDropModalProps {
-  onOptionSelect: (option: EToolResources | undefined) => void;
+  onOptionSelect: (option: string | undefined) => void;
   files: File[];
   isVisible: boolean;
   setShowModal: (showModal: boolean) => void;
@@ -28,17 +22,10 @@ interface FileOption {
 
 const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragDropModalProps) => {
   const localize = useLocalize();
-  const { agentsConfig } = useGetAgentsConfig();
-  /** TODO: Ephemeral Agent Capabilities
-   * Allow defining agent capabilities on a per-endpoint basis
-   * Use definition for agents endpoint for ephemeral agents
-   * */
-  const capabilities = useAgentCapabilities(agentsConfig?.capabilities ?? defaultAgentCapabilities);
-  const { conversationId, agentId } = useDragDropContext();
-  const ephemeralAgent = useRecoilValue(ephemeralAgentByConvoId(conversationId ?? ''));
-  const { fileSearchAllowedByAgent, codeAllowedByAgent } = useAgentToolPermissions(
-    agentId,
-    ephemeralAgent,
+  const { data: endpointsConfig } = useGetEndpointsQuery();
+  const capabilities = useMemo(
+    () => endpointsConfig?.[EModelEndpoint.agents]?.capabilities ?? [],
+    [endpointsConfig],
   );
 
   const options = useMemo(() => {
@@ -50,30 +37,31 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
         condition: files.every((file) => file.type?.startsWith('image/')),
       },
     ];
-    if (capabilities.fileSearchEnabled && fileSearchAllowedByAgent) {
-      _options.push({
-        label: localize('com_ui_upload_file_search'),
-        value: EToolResources.file_search,
-        icon: <FileSearch className="icon-md" />,
-      });
-    }
-    if (capabilities.codeEnabled && codeAllowedByAgent) {
-      _options.push({
-        label: localize('com_ui_upload_code_files'),
-        value: EToolResources.execute_code,
-        icon: <TerminalSquareIcon className="icon-md" />,
-      });
-    }
-    if (capabilities.contextEnabled) {
-      _options.push({
-        label: localize('com_ui_upload_ocr_text'),
-        value: EToolResources.context,
-        icon: <FileType2Icon className="icon-md" />,
-      });
+    for (const capability of capabilities) {
+      if (capability === EToolResources.file_search) {
+        _options.push({
+          label: localize('com_ui_upload_file_search'),
+          value: EToolResources.file_search,
+          icon: <FileSearch className="icon-md" />,
+        });
+        /*
+      } else if (capability === EToolResources.execute_code) {
+        _options.push({
+          label: localize('com_ui_upload_code_files'),
+          value: EToolResources.execute_code,
+          icon: <TerminalSquareIcon className="icon-md" />,
+        }); */
+      } else if (capability === EToolResources.ocr) {
+        _options.push({
+          label: localize('com_ui_upload_ocr_text'),
+          value: EToolResources.ocr,
+          icon: <FileType2Icon className="icon-md" />,
+        });
+      }
     }
 
     return _options;
-  }, [capabilities, files, localize, fileSearchAllowedByAgent, codeAllowedByAgent]);
+  }, [capabilities, files, localize]);
 
   if (!isVisible) {
     return null;

@@ -1,4 +1,20 @@
 require('dotenv').config();
+
+// Set domain fallbacks using CONTAINER_APP_ENV_DNS_SUFFIX and CONTAINER_APP_HOSTNAME if not already set
+if (process.env.CONTAINER_APP_ENV_DNS_SUFFIX && process.env.CONTAINER_APP_HOSTNAME && !process.env.DOMAIN_CLIENT) {
+  // Extract app name prefix (e.g., "ca-euw-libre-chat-prod" from "ca-euw-libre-chat-prod--0000001.domain.com")
+  const appNamePrefix = process.env.CONTAINER_APP_HOSTNAME.split('.')[0].replace(/--\d+$/, '');
+  const fullDomain = `${appNamePrefix}.${process.env.CONTAINER_APP_ENV_DNS_SUFFIX}`;
+  process.env.DOMAIN_CLIENT = `https://${fullDomain}`;
+}
+if (process.env.CONTAINER_APP_ENV_DNS_SUFFIX && process.env.CONTAINER_APP_HOSTNAME && !process.env.DOMAIN_SERVER) {
+  process.env.DOMAIN_SERVER = process.env.DOMAIN_CLIENT;
+}
+
+console.log("DEBUG: CONTAINER_APP_HOSTNAME =", process.env.CONTAINER_APP_HOSTNAME);
+console.log("DEBUG: DOMAIN_CLIENT =", process.env.DOMAIN_CLIENT);
+console.log("DEBUG: DOMAIN_SERVER =", process.env.DOMAIN_SERVER);
+
 const path = require('path');
 require('module-alias')({ base: path.resolve(__dirname, '..') });
 const cors = require('cors');

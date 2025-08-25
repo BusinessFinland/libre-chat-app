@@ -12,7 +12,6 @@ import { icons } from '~/hooks/Endpoint/Icons';
 import { processAgentOption } from '~/utils';
 import Instructions from './Instructions';
 import AgentAvatar from './AgentAvatar';
-import FileContext from './FileContext';
 import { useLocalize } from '~/hooks';
 import FileSearch from './FileSearch';
 import Artifacts from './Artifacts';
@@ -64,10 +63,10 @@ export default function AgentConfig({
     () => agentsConfig?.capabilities?.includes(AgentCapabilities.artifacts) ?? false,
     [agentsConfig],
   );
-  const ocrEnabled = useMemo(
+  /* const ocrEnabled = useMemo(
     () => agentsConfig?.capabilities?.includes(AgentCapabilities.ocr) ?? false,
     [agentsConfig],
-  );
+  ); */
   const fileSearchEnabled = useMemo(
     () => agentsConfig?.capabilities?.includes(AgentCapabilities.file_search) ?? false,
     [agentsConfig],
@@ -77,7 +76,7 @@ export default function AgentConfig({
     [agentsConfig],
   ); */
 
-  const context_files = useMemo(() => {
+  /* const context_files = useMemo(() => {
     if (typeof agent === 'string') {
       return [];
     }
@@ -95,7 +94,7 @@ export default function AgentConfig({
       fileMap,
     });
     return _agent.context_files ?? [];
-  }, [agent, agent_id, fileMap]);
+  }, [agent, agent_id, fileMap]); */
 
   const knowledge_files = useMemo(() => {
     if (typeof agent === 'string') {
@@ -256,8 +255,8 @@ export default function AgentConfig({
             </div>
           </button>
         </div>
-        {/*codeEnabled || */}
-        {(fileSearchEnabled || artifactsEnabled || ocrEnabled) && (
+        {/*codeEnabled || ocrEnabled || */}
+        {(fileSearchEnabled || artifactsEnabled) && (
           <div className="mb-4 flex w-full flex-col items-start gap-3">
             <label className="text-token-text-primary block font-medium">
               {localize('com_assistants_capabilities')}
@@ -265,7 +264,7 @@ export default function AgentConfig({
             {/* Code Execution */}
             {/* codeEnabled && <CodeForm agent_id={agent_id} files={code_files} /> */}
             {/* File Context (OCR) */}
-            {ocrEnabled && <FileContext agent_id={agent_id} files={context_files} />}
+            {/* ocrEnabled && <FileContext agent_id={agent_id} files={context_files} /> */}
             {/* Artifacts */}
             {artifactsEnabled && <Artifacts />}
             {/* File Search */}

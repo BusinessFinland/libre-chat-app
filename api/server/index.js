@@ -43,7 +43,7 @@ const { PORT, HOST, ALLOW_SOCIAL_LOGIN, DISABLE_COMPRESSION, TRUST_PROXY } = pro
 // Allow PORT=0 to be used for automatic free port assignment
 const port = isNaN(Number(PORT)) ? 3080 : Number(PORT);
 const host = HOST || 'localhost';
-const trusted_proxy = Number(TRUST_PROXY) || 1; /* trust first proxy by default */
+// const trusted_proxy = Number(TRUST_PROXY) || 1; /* trust first proxy by default */
 
 const app = express();
 
@@ -56,7 +56,7 @@ const startServer = async () => {
   await indexSync();
 
   app.disable('x-powered-by');
-  app.set('trust proxy', trusted_proxy);
+  app.set('trust proxy', true);
 
   await AppService(app);
 

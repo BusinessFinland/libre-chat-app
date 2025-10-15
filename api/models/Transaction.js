@@ -172,9 +172,29 @@ transactionSchema.statics.createAutoRefillTransaction = async function (txData) 
   transaction.calculateTokenValue();
   await transaction.save();
 
+  // Get the current balance to check against maxBalance
+  const currentBalance = await Balance.findOne({ user: transaction.user }).lean();
+  const maxBalance = currentBalance?.maxBalance || 0;
+
+  // Calculate the refill amount, capping at maxBalance if set
+  let refillAmount = txData.rawAmount;
+  if (maxBalance > 0) {
+    const currentCredits = currentBalance?.tokenCredits || 0;
+    const potentialBalance = currentCredits + refillAmount;
+    if (potentialBalance > maxBalance) {
+      refillAmount = Math.max(0, maxBalance - currentCredits);
+      logger.debug('[Balance.check] Auto-refill capped at maxBalance', {
+        currentCredits,
+        maxBalance,
+        requestedRefill: txData.rawAmount,
+        actualRefill: refillAmount,
+      });
+    }
+  }
+
   const balanceResponse = await updateBalance({
     user: transaction.user,
-    incrementValue: txData.rawAmount,
+    incrementValue: refillAmount,
     setValues: { lastRefill: new Date() },
   });
   const result = {

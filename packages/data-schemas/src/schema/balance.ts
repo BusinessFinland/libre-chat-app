@@ -9,6 +9,7 @@ export interface IBalance extends Document {
   refillIntervalUnit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months';
   lastRefill: Date;
   refillAmount: number;
+  maxBalance: number;
 }
 
 const balanceSchema = new Schema<IBalance>({
@@ -43,6 +44,11 @@ const balanceSchema = new Schema<IBalance>({
   },
   // amount to add on each refill
   refillAmount: {
+    type: Number,
+    default: 0,
+  },
+  // maximum balance allowed (cap for auto-refills)
+  maxBalance: {
     type: Number,
     default: 0,
   },

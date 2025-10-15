@@ -301,25 +301,25 @@ transactionSchema.methods.calculateStructuredTokenValue = function () {
       read: readMultiplier,
     };
 
-    const totalPromptTokens =
-      Math.abs(this.inputTokens || 0) +
-      Math.abs(this.writeTokens || 0) +
-      Math.abs(this.readTokens || 0);
+    const inputTokensAbs = Math.abs(this.inputTokens || 0);
+    const writeTokensAbs = Math.abs(this.writeTokens || 0);
+    const readTokensAbs = Math.abs(this.readTokens || 0);
+    const totalPromptTokens = inputTokensAbs + writeTokensAbs + readTokensAbs;
 
     if (totalPromptTokens > 0) {
       this.rate =
-        (Math.abs(inputMultiplier * (this.inputTokens || 0)) +
-          Math.abs(writeMultiplier * (this.writeTokens || 0)) +
-          Math.abs(readMultiplier * (this.readTokens || 0))) /
+        (inputTokensAbs * Math.abs(inputMultiplier) +
+          writeTokensAbs * Math.abs(writeMultiplier) +
+          readTokensAbs * Math.abs(readMultiplier)) /
         totalPromptTokens;
     } else {
       this.rate = Math.abs(inputMultiplier); // Default to input rate if no tokens
     }
 
     this.tokenValue = -(
-      Math.abs(this.inputTokens || 0) * inputMultiplier +
-      Math.abs(this.writeTokens || 0) * writeMultiplier +
-      Math.abs(this.readTokens || 0) * readMultiplier
+      inputTokensAbs * Math.abs(inputMultiplier) +
+      writeTokensAbs * Math.abs(writeMultiplier) +
+      readTokensAbs * Math.abs(readMultiplier)
     );
 
     this.rawAmount = -totalPromptTokens;

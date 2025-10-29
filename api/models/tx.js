@@ -86,6 +86,8 @@ const tokenValues = Object.assign(
     'gpt-4.1-mini': { prompt: 0.4, completion: 1.6 },
     'gpt-4.1': { prompt: 2, completion: 8 },
     'gpt-4.5': { prompt: 75, completion: 150 },
+    'gpt-5': { prompt: 2.5, completion: 10 },
+    'gpt-5-chat': { prompt: 2.5, completion: 10 },
     'gpt-4o-mini': { prompt: 0.15, completion: 0.6 },
     'gpt-4o': { prompt: 2.5, completion: 10 },
     'gpt-4o-2024-05-13': { prompt: 5, completion: 15 },
@@ -173,6 +175,7 @@ const cacheTokenValues = {
  */
 const getValueKey = (model, endpoint) => {
   const modelName = matchModelName(model, endpoint);
+  console.log('DEBUG matchModelName:', { model, endpoint, modelName });
   if (!modelName) {
     return undefined;
   }
@@ -229,8 +232,11 @@ const getValueKey = (model, endpoint) => {
     return modelName;
   }
 
+  console.log('DEBUG getValueKey returning undefined for:', { modelName });
   return undefined;
 };
+
+console.log('DEBUG tx.js loaded, tokenValues gpt-4o:', tokenValues['gpt-4o']);
 
 /**
  * Retrieves the multiplier for a given value key and token type. If no value key is provided,
@@ -246,24 +252,32 @@ const getValueKey = (model, endpoint) => {
  */
 const getMultiplier = ({ valueKey, tokenType, model, endpoint, endpointTokenConfig }) => {
   if (endpointTokenConfig) {
-    return endpointTokenConfig?.[model]?.[tokenType] ?? defaultRate;
+    const result = endpointTokenConfig?.[model]?.[tokenType] ?? defaultRate;
+    console.log('DEBUG getMultiplier (endpointTokenConfig):', { model, tokenType, result });
+    return result;
   }
 
   if (valueKey && tokenType) {
-    return tokenValues[valueKey][tokenType] ?? defaultRate;
+    const result = tokenValues[valueKey][tokenType] ?? defaultRate;
+    console.log('DEBUG getMultiplier (valueKey provided):', { valueKey, tokenType, result });
+    return result;
   }
 
   if (!tokenType || !model) {
+    console.log('DEBUG getMultiplier (no tokenType/model):', { tokenType, model });
     return 1;
   }
 
   valueKey = getValueKey(model, endpoint);
   if (!valueKey) {
+    console.log('DEBUG getMultiplier (no valueKey found):', { model, endpoint, defaultRate });
     return defaultRate;
   }
 
   // If we got this far, and values[tokenType] is undefined somehow, return a rough average of default multipliers
-  return tokenValues[valueKey]?.[tokenType] ?? defaultRate;
+  const result = tokenValues[valueKey]?.[tokenType] ?? defaultRate;
+  console.log('DEBUG getMultiplier (final):', { model, endpoint, valueKey, tokenType, result, tokenValues: tokenValues[valueKey] });
+  return result;
 };
 
 /**

@@ -172,9 +172,29 @@ transactionSchema.statics.createAutoRefillTransaction = async function (txData) 
   transaction.calculateTokenValue();
   await transaction.save();
 
+  // Get the current balance to check against maxBalance
+  const currentBalance = await Balance.findOne({ user: transaction.user }).lean();
+  const maxBalance = currentBalance?.maxBalance || 0;
+
+  // Calculate the refill amount, capping at maxBalance if set
+  let refillAmount = txData.rawAmount;
+  if (maxBalance > 0) {
+    const currentCredits = currentBalance?.tokenCredits || 0;
+    const potentialBalance = currentCredits + refillAmount;
+    if (potentialBalance > maxBalance) {
+      refillAmount = Math.max(0, maxBalance - currentCredits);
+      logger.debug('[Balance.check] Auto-refill capped at maxBalance', {
+        currentCredits,
+        maxBalance,
+        requestedRefill: txData.rawAmount,
+        actualRefill: refillAmount,
+      });
+    }
+  }
+
   const balanceResponse = await updateBalance({
     user: transaction.user,
-    incrementValue: txData.rawAmount,
+    incrementValue: refillAmount,
     setValues: { lastRefill: new Date() },
   });
   const result = {
@@ -281,25 +301,25 @@ transactionSchema.methods.calculateStructuredTokenValue = function () {
       read: readMultiplier,
     };
 
-    const totalPromptTokens =
-      Math.abs(this.inputTokens || 0) +
-      Math.abs(this.writeTokens || 0) +
-      Math.abs(this.readTokens || 0);
+    const inputTokensAbs = Math.abs(this.inputTokens || 0);
+    const writeTokensAbs = Math.abs(this.writeTokens || 0);
+    const readTokensAbs = Math.abs(this.readTokens || 0);
+    const totalPromptTokens = inputTokensAbs + writeTokensAbs + readTokensAbs;
 
     if (totalPromptTokens > 0) {
       this.rate =
-        (Math.abs(inputMultiplier * (this.inputTokens || 0)) +
-          Math.abs(writeMultiplier * (this.writeTokens || 0)) +
-          Math.abs(readMultiplier * (this.readTokens || 0))) /
+        (inputTokensAbs * Math.abs(inputMultiplier) +
+          writeTokensAbs * Math.abs(writeMultiplier) +
+          readTokensAbs * Math.abs(readMultiplier)) /
         totalPromptTokens;
     } else {
       this.rate = Math.abs(inputMultiplier); // Default to input rate if no tokens
     }
 
     this.tokenValue = -(
-      Math.abs(this.inputTokens || 0) * inputMultiplier +
-      Math.abs(this.writeTokens || 0) * writeMultiplier +
-      Math.abs(this.readTokens || 0) * readMultiplier
+      inputTokensAbs * Math.abs(inputMultiplier) +
+      writeTokensAbs * Math.abs(writeMultiplier) +
+      readTokensAbs * Math.abs(readMultiplier)
     );
 
     this.rawAmount = -totalPromptTokens;

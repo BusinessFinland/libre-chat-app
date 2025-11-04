@@ -54,6 +54,84 @@ const resetPasswordController = async (req, res) => {
 };
 
 const refreshController = async (req, res) => {
+  // Auto-authenticate dev user in development mode
+  if (process.env.NODE_ENV === 'development') {
+    const User = require('~/models/User');
+    const Balance = require('~/models/Balance');
+    const { getBalanceConfig } = require('~/server/services/Config');
+
+    let devUser = await User.findOne({ email: 'dev@librechat.local' }, '-password -__v -totpSecret');
+
+    if (!devUser) {
+      devUser = await User.create({
+        email: 'dev@librechat.local',
+        username: 'dev',
+        name: 'Development User',
+        emailVerified: true,
+        role: 'ADMIN',
+      });
+      console.log('Created dev user for auto-authentication');
+    }
+
+    // Ensure balance exists for dev user and update config
+    const balanceConfig = await getBalanceConfig();
+    if (balanceConfig?.enabled && balanceConfig.startBalance != null) {
+      let balance = await Balance.findOne({ user: devUser._id });
+
+      if (!balance) {
+        await Balance.create({
+          user: devUser._id,
+          tokenCredits: balanceConfig.startBalance,
+          autoRefillEnabled: balanceConfig.autoRefillEnabled,
+          refillIntervalValue: balanceConfig.refillIntervalValue,
+          refillIntervalUnit: balanceConfig.refillIntervalUnit,
+          refillAmount: balanceConfig.refillAmount,
+        });
+        console.log(`Created balance for dev user with ${balanceConfig.startBalance} tokens`);
+      } else {
+        // Update balance config if it changed
+        const needsUpdate =
+          balance.autoRefillEnabled !== balanceConfig.autoRefillEnabled ||
+          balance.refillIntervalValue !== balanceConfig.refillIntervalValue ||
+          balance.refillIntervalUnit !== balanceConfig.refillIntervalUnit ||
+          balance.refillAmount !== balanceConfig.refillAmount;
+
+        // Also cap balance at maxBalance if it exceeds the new limit
+        const exceedsMaxBalance = balanceConfig.maxBalance != null && balance.tokenCredits > balanceConfig.maxBalance;
+
+        if (needsUpdate || exceedsMaxBalance) {
+          const updateFields = {
+            autoRefillEnabled: balanceConfig.autoRefillEnabled,
+            refillIntervalValue: balanceConfig.refillIntervalValue,
+            refillIntervalUnit: balanceConfig.refillIntervalUnit,
+            refillAmount: balanceConfig.refillAmount,
+          };
+
+          // Cap the current balance at maxBalance if needed
+          if (exceedsMaxBalance) {
+            updateFields.tokenCredits = balanceConfig.maxBalance;
+          }
+
+          await Balance.updateOne(
+            { user: devUser._id },
+            { $set: updateFields }
+          );
+
+          if (exceedsMaxBalance) {
+            console.log(`Updated balance config for dev user and capped balance from ${balance.tokenCredits} to ${balanceConfig.maxBalance} tokens`);
+          } else {
+            console.log(`Updated balance config for dev user: refill ${balanceConfig.refillAmount} every ${balanceConfig.refillIntervalValue} ${balanceConfig.refillIntervalUnit}`);
+          }
+        } else {
+          console.log(`Dev user balance: ${balance.tokenCredits} tokens`);
+        }
+      }
+    }
+
+    const token = await setAuthTokens(devUser._id, res);
+    return res.status(200).send({ token, user: devUser });
+  }
+
   const refreshToken = req.headers.cookie ? cookies.parse(req.headers.cookie).refreshToken : null;
   if (!refreshToken) {
     return res.status(200).send('Refresh token not provided');

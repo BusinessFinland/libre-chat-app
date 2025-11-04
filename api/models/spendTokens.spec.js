@@ -721,4 +721,84 @@ describe('spendTokens', () => {
     expect(balance).toBeDefined();
     expect(balance.tokenCredits).toBeLessThan(10000); // Balance should be reduced
   });
+
+  it('should respect maxBalance when auto-refilling', async () => {
+    const maxBalance = 50000;
+    const refillAmount = 30000;
+
+    // Create a balance at 25000 with maxBalance set to 50000
+    await Balance.create({
+      user: userId,
+      tokenCredits: 25000,
+      autoRefillEnabled: true,
+      refillAmount: refillAmount,
+      maxBalance: maxBalance,
+    });
+
+    // Attempt to refill (should only add 25000 to reach maxBalance of 50000)
+    const result = await Transaction.createAutoRefillTransaction({
+      user: userId,
+      tokenType: 'credits',
+      context: 'autoRefill',
+      rawAmount: refillAmount,
+    });
+
+    // Verify the balance is capped at maxBalance
+    const balance = await Balance.findOne({ user: userId });
+    expect(balance.tokenCredits).toBe(maxBalance);
+    expect(result.balance).toBe(maxBalance);
+  });
+
+  it('should not refill when balance is already at maxBalance', async () => {
+    const maxBalance = 50000;
+    const refillAmount = 30000;
+
+    // Create a balance already at maxBalance
+    await Balance.create({
+      user: userId,
+      tokenCredits: maxBalance,
+      autoRefillEnabled: true,
+      refillAmount: refillAmount,
+      maxBalance: maxBalance,
+    });
+
+    // Attempt to refill (should not add anything)
+    const result = await Transaction.createAutoRefillTransaction({
+      user: userId,
+      tokenType: 'credits',
+      context: 'autoRefill',
+      rawAmount: refillAmount,
+    });
+
+    // Verify the balance remains at maxBalance
+    const balance = await Balance.findOne({ user: userId });
+    expect(balance.tokenCredits).toBe(maxBalance);
+    expect(result.balance).toBe(maxBalance);
+  });
+
+  it('should allow refills beyond maxBalance when maxBalance is 0', async () => {
+    const refillAmount = 30000;
+
+    // Create a balance with maxBalance = 0 (no limit)
+    await Balance.create({
+      user: userId,
+      tokenCredits: 100000,
+      autoRefillEnabled: true,
+      refillAmount: refillAmount,
+      maxBalance: 0,
+    });
+
+    // Attempt to refill (should add full amount)
+    const result = await Transaction.createAutoRefillTransaction({
+      user: userId,
+      tokenType: 'credits',
+      context: 'autoRefill',
+      rawAmount: refillAmount,
+    });
+
+    // Verify the balance increased by the full refill amount
+    const balance = await Balance.findOne({ user: userId });
+    expect(balance.tokenCredits).toBe(130000);
+    expect(result.balance).toBe(130000);
+  });
 });

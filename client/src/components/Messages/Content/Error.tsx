@@ -86,6 +86,10 @@ const errorMessages = {
     return (
       <>
         {message}
+        <br />
+        <span className="text-sm text-gray-600 dark:text-gray-400">
+          Your token balance will be automatically refilled. Click the regenerate button (↻) below to retry once tokens are available.
+        </span>
         {generations && (
           <>
             <br />

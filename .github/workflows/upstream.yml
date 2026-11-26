@@ -1,0 +1,366 @@
+# The upstream autopilot, after Vimma's (vimma-browser/vimma upstream.yml). When
+# LibreChat ships a release, above all a security release, it merges the
+# release into main on a branch and opens a tested PR with no manual step; a
+# person reviews and merges. Where the merge conflicts, it opens a triage issue
+# instead, for a person or a coding agent.
+#
+#   detect        daily, < 1 min, read-only. Newer release (tags vX.Y.Z; upstream
+#                 marks every GitHub release a prerelease)? Fixes an advisory
+#                 that affects us (security)? Drift?
+#   track         a newer release: its tracking issue, labelled upstream (+ security).
+#   merge-check   merge the release into main in a scratch checkout. Read-only.
+#   publish       clean: push upstream/librechat-vX.Y.Z (the merge plus the
+#                 .github/upstream.json bump) and open the PR; CI tests it.
+#   conflict-issue  conflicts: one triage issue per release listing the files.
+#   drift         past the drift limit (tools/upstream/detect.py): issue + a failing run.
+#
+# v1 merges, because main is a merge-based fork. Once our changes are a patch
+# queue over a pinned upstream (the Vimma model), merge-check becomes a
+# patch-apply check and the rest stays.
+#
+# The heavy jobs run once per release: when upstream/librechat-vX.Y.Z exists or
+# the release's conflict issue is open, the release has been handled (rerun with
+# `gh workflow run upstream.yml -f rebuild=true`). Detection reads public
+# upstream data only. Never pull_request_target: nothing here runs PR code.
+name: upstream
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Merge and publish again even if the release was handled (the branch is rebuilt)
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: upstream
+  cancel-in-progress: false
+
+env:
+  OWNER: JRanne # mentioned on security and drift issues
+
+jobs:
+  detect:
+    if: github.repository == 'BusinessFinland/libre-chat-app'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # .github/upstream.json, tools/upstream; the branch lookup
+      issues: read # the tracking and conflict issues
+    outputs:
+      version: ${{ steps.detect.outputs.version }}
+      security: ${{ steps.detect.outputs.security }}
+      labels: ${{ steps.detect.outputs.labels }}
+      drift: ${{ steps.detect.outputs.drift }}
+      drift-line: ${{ steps.detect.outputs.drift-line }}
+      detection: ${{ steps.detect.outputs.detection }}
+      merge: ${{ steps.state.outputs.merge }}
+      issue: ${{ steps.state.outputs.issue }}
+      track: ${{ steps.state.outputs.track }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/upstream
+            .github/upstream.json
+          sparse-checkout-cone-mode: false
+
+      - name: Detect a newer LibreChat release, classify it, measure drift
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I tools/upstream/detect.py --github-output "$GITHUB_OUTPUT" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: What is already done for this release
+        id: state
+        if: steps.detect.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.detect.outputs.version }}
+          SECURITY: ${{ steps.detect.outputs.security }}
+          REBUILD: ${{ inputs.rebuild || false }}
+        run: |
+          branch="upstream/librechat-$VERSION"
+          conflict_title="LibreChat $VERSION: upstream merge conflicts"
+          conflict=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --label upstream \
+            --search "\"$conflict_title\" in:title" --json number,title \
+            --jq "[.[] | select(.title == \"$conflict_title\")][0].number // empty")
+          if [ "$REBUILD" = true ] || { [ -z "$conflict" ] &&
+            ! gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --silent 2>/dev/null; }; then
+            merge=true
+          else
+            merge=false
+          fi
+          title="LibreChat $VERSION released"
+          issue=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --label upstream \
+            --search "\"$title\" in:title" --json number,title,labels \
+            --jq "[.[] | select(.title == \"$title\")][0]")
+          number=$(jq -r '.number // empty' <<< "${issue:-null}")
+          has_security=$(jq -r '[.labels[]?.name] | index("security") != null' <<< "${issue:-null}")
+          if [ -z "$number" ] || { [ "$SECURITY" != false ] && [ "$has_security" != true ]; }; then
+            track=true
+          else
+            track=false
+          fi
+          { echo "merge=$merge"; echo "issue=$number"; echo "track=$track"; } >> "$GITHUB_OUTPUT"
+          echo "Branch $branch: merge=$merge; tracking issue: ${number:-none} (track=$track); conflict issue: ${conflict:-none}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  track:
+    needs: detect
+    if: needs.detect.outputs.track == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write # create or label the tracking issue
+    outputs:
+      issue: ${{ steps.issue.outputs.issue }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/upstream
+
+      - name: Open or label the tracking issue
+        id: issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DETECTION: ${{ needs.detect.outputs.detection }}
+          LABELS: ${{ needs.detect.outputs.labels }}
+          ISSUE: ${{ needs.detect.outputs.issue }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s' "$DETECTION" > "$RUNNER_TEMP/detection.json"
+          gh label create upstream --color 1D76DB --description "LibreChat upstream release" --force
+          gh label create security --color B60205 --description "Security: act within days" --force
+          body() { python3 -I tools/upstream/body.py "$@" --detection "$RUNNER_TEMP/detection.json" --run-url "$RUN_URL" --owner "$OWNER"; }
+          body issue > "$RUNNER_TEMP/issue.md"
+          if [ -z "$ISSUE" ]; then
+            url=$(gh issue create --title "$(body issue-title)" --label "$LABELS" --body-file "$RUNNER_TEMP/issue.md")
+            ISSUE=${url##*/}
+          else
+            gh issue edit "$ISSUE" --add-label "$LABELS" --body-file "$RUNNER_TEMP/issue.md"
+            gh issue comment "$ISSUE" --body "@$OWNER an advisory now covers this release: labelled \`security\` ([run]($RUN_URL))."
+          fi
+          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+
+  merge-check:
+    needs: detect
+    if: needs.detect.outputs.merge == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.merge.outputs.result }}
+      count: ${{ steps.merge.outputs.count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Merge the release into main (scratch)
+        id: merge
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          repo=$(jq -r .repository .github/upstream.json)
+          git fetch --no-tags "https://github.com/$repo.git" "refs/tags/$VERSION:refs/tags/$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git merge --no-ff --no-commit "$VERSION" > merge.log 2>&1; then
+            echo "result=clean" >> "$GITHUB_OUTPUT"
+            echo "count=0" >> "$GITHUB_OUTPUT"
+            : > conflicts.txt
+            echo "Merging $VERSION into main: clean" >> "$GITHUB_STEP_SUMMARY"
+          else
+            git diff --name-only --diff-filter=U > conflicts.txt
+            n=$(wc -l < conflicts.txt | tr -d ' ')
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+            echo "count=$n" >> "$GITHUB_OUTPUT"
+            { echo "Merging $VERSION into main: **$n conflicting files**"; echo; sed 's/^/- /' conflicts.txt | head -100; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          git merge --abort 2>/dev/null || true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: merge-check
+          path: |
+            conflicts.txt
+            merge.log
+          retention-days: 30
+
+  publish:
+    needs: [detect, track, merge-check]
+    if: >-
+      always() && needs.merge-check.outputs.result == 'clean' &&
+      needs.track.result != 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # push upstream/librechat-vX.Y.Z
+      pull-requests: write # open the PR, close superseded ones
+      issues: write # labels; superseded tracking issues
+    env:
+      VERSION: ${{ needs.detect.outputs.version }}
+      LABELS: ${{ needs.detect.outputs.labels }}
+      ISSUE: ${{ needs.track.outputs.issue || needs.detect.outputs.issue }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # A PR or push made with an App's token starts CI; one made with
+      # GITHUB_TOKEN does not. Without the App (vars.UPSTREAM_APP_CLIENT_ID and
+      # secrets.UPSTREAM_APP_KEY) the PR opens as a draft with GITHUB_TOKEN.
+      - name: Token of the upstream App
+        id: app
+        if: vars.UPSTREAM_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.UPSTREAM_APP_CLIENT_ID }}
+          private-key: ${{ secrets.UPSTREAM_APP_KEY }}
+          owner: BusinessFinland
+          repositories: libre-chat-app
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token || github.token }}
+
+      - name: Push the merge branch
+        run: |
+          branch="upstream/librechat-$VERSION"
+          repo=$(jq -r .repository .github/upstream.json)
+          old=$(jq -r .version .github/upstream.json)
+          git fetch --no-tags "https://github.com/$repo.git" "refs/tags/$VERSION:refs/tags/$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$branch"
+          git merge --no-ff --no-edit -m "upstream: merge LibreChat $VERSION" "$VERSION"
+          jq --arg v "$VERSION" '.version = $v' .github/upstream.json > "$RUNNER_TEMP/u.json"
+          mv "$RUNNER_TEMP/u.json" .github/upstream.json
+          git commit -am "upstream: LibreChat $old -> $VERSION" \
+            -m "Opened by the upstream autopilot (.github/workflows/upstream.yml)."
+          # Only this job writes upstream/*.
+          git push --force origin "HEAD:refs/heads/$branch"
+
+      - name: Open the PR
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          DETECTION: ${{ needs.detect.outputs.detection }}
+          HAS_APP: ${{ steps.app.outputs.token != '' }}
+        run: |
+          branch="upstream/librechat-$VERSION"
+          printf '%s' "$DETECTION" > "$RUNNER_TEMP/detection.json"
+          draft=$([ "$HAS_APP" = true ] && echo false || echo true)
+          body() { python3 -I tools/upstream/body.py "$@" --detection "$RUNNER_TEMP/detection.json" \
+            --run-url "$RUN_URL" --branch "$branch" --issue "$ISSUE" --draft "$draft"; }
+          body pr > "$RUNNER_TEMP/pr.md"
+          title=$(body pr-title)
+          gh label create upstream --color 1D76DB --description "LibreChat upstream release" --force
+          gh label create security --color B60205 --description "Security: act within days" --force
+          existing=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body-file "$RUNNER_TEMP/pr.md" --add-label "$LABELS"
+            pr="#$existing"
+          else
+            flags=(); [ "$draft" = true ] && flags=(--draft)
+            url=$(gh pr create "${flags[@]}" --base main --head "$branch" --label "$LABELS" \
+              --title "$title" --body-file "$RUNNER_TEMP/pr.md")
+            pr="#${url##*/}"
+          fi
+          echo "Opened or updated $pr for $branch" >> "$GITHUB_STEP_SUMMARY"
+          [ -z "$ISSUE" ] || gh issue comment "$ISSUE" --body "The autopilot opened $pr ([run]($RUN_URL))."
+          # A newer release supersedes the PRs and tracking issues of older ones.
+          gh pr list --state open --label upstream --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"upstream/librechat-\")) | select(.headRefName != \"$branch\") | .number" |
+            while read -r n; do gh pr close "$n" --delete-branch --comment "Superseded by $pr (LibreChat $VERSION)."; done
+          gh issue list --state open --label upstream --json number,title \
+            --jq ".[] | select(.title | test(\"^LibreChat v[0-9.]+ released$\")) | select(.number != ${ISSUE:-0}) | .number" |
+            while read -r n; do gh issue close "$n" --comment "Superseded by LibreChat $VERSION ($pr)."; done
+
+  conflict-issue:
+    needs: [detect, track, merge-check]
+    if: always() && needs.merge-check.outputs.result == 'conflict'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write # open or update the triage issue
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/upstream
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: merge-check
+          path: ${{ runner.temp }}/merge-check
+
+      - name: Open or update the triage issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DETECTION: ${{ needs.detect.outputs.detection }}
+          LABELS: ${{ needs.detect.outputs.labels }}
+          ISSUE: ${{ needs.track.outputs.issue || needs.detect.outputs.issue }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s' "$DETECTION" > "$RUNNER_TEMP/detection.json"
+          body() { python3 -I tools/upstream/body.py "$@" --detection "$RUNNER_TEMP/detection.json" \
+            --run-url "$RUN_URL" --owner "$OWNER" --issue "$ISSUE" --conflicts "$RUNNER_TEMP/merge-check/conflicts.txt"; }
+          title=$(body conflict-title)
+          body conflict > "$RUNNER_TEMP/conflict.md"
+          gh label create upstream --color 1D76DB --description "LibreChat upstream release" --force
+          gh label create triage --color FBCA04 --description "Needs a person or agent" --force
+          n=$(gh issue list --state open --label upstream --search "\"$title\" in:title" --json number,title \
+            --jq "[.[] | select(.title == \"$title\")][0].number // empty")
+          if [ -n "$n" ]; then
+            gh issue edit "$n" --body-file "$RUNNER_TEMP/conflict.md"
+          else
+            url=$(gh issue create --title "$title" --label "$LABELS" --label triage --body-file "$RUNNER_TEMP/conflict.md")
+            n=${url##*/}
+            [ -z "$ISSUE" ] || gh issue comment "$ISSUE" --body "The merge conflicts: #$n ([run]($RUN_URL))."
+          fi
+
+  drift:
+    needs: detect
+    if: needs.detect.outputs.drift == 'overdue'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write # the drift issue
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/upstream
+
+      - name: Open the drift issue (once) and fail
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DETECTION: ${{ needs.detect.outputs.detection }}
+          DRIFT_LINE: ${{ needs.detect.outputs.drift-line }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s' "$DETECTION" > "$RUNNER_TEMP/detection.json"
+          body() { python3 -I tools/upstream/body.py "$@" --detection "$RUNNER_TEMP/detection.json" --run-url "$RUN_URL" --owner "$OWNER"; }
+          title=$(body drift-title)
+          gh label create security --color B60205 --description "Security: act within days" --force
+          open=$(gh issue list --state open --label security --search "\"$title\" in:title" --json number,title \
+            --jq "[.[] | select(.title == \"$title\")][0].number // empty")
+          if [ -z "$open" ]; then
+            body drift > "$RUNNER_TEMP/drift.md"
+            gh issue create --title "$title" --label security --body-file "$RUNNER_TEMP/drift.md"
+          fi
+          echo "::error::$DRIFT_LINE"
+          exit 1

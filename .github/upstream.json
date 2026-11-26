@@ -1,0 +1,5 @@
+{
+  "repository": "danny-avila/LibreChat",
+  "version": "v0.7.8",
+  "note": "The upstream release main is merged up to. The upstream autopilot (.github/workflows/upstream.yml) reads it and its bump PRs update it; change it by hand only after merging an upstream release by hand."
+}

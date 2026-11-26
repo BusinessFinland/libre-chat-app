@@ -2,7 +2,7 @@ name: AKS dev image
 
 # Builds the LibreChat image once into the dev registry of the AKS platform
 # (crseckubedev), mirrors the third-party images it runs with, and starts the
-# dev deploy in BusinessFinland/aks-librechat-manifests. Test and prod promote
+# dev deploy in BusinessFinland/libre-chat-infra. Test and prod promote
 # this same image by digest from there; nothing here touches them.
 #
 # This repository is public. The push signs in with GitHub OIDC as
@@ -73,9 +73,9 @@ jobs:
             echo "Mirrored \`$src\` -> \`$REGISTRY/mirror/$dst\`" >> "$GITHUB_STEP_SUMMARY"
           done
 
-  # Starts aks-librechat-manifests' librechat-manifests workflow on its dev
+  # Starts libre-chat-infra's librechat-manifests workflow on its dev
   # branch with this image. Needs the librechatdeployment GitHub App installed
-  # on aks-librechat-manifests and the repository variable
+  # on libre-chat-infra and the repository variable
   # AKS_DEV_DEPLOY=true; until then deploy by hand with the image from the
   # summary above.
   deploy-dev:
@@ -92,7 +92,7 @@ jobs:
           client-id: Iv23lifK2y13294UzuWb # librechatdeployment (app id 1295399)
           private-key: ${{ secrets.PEM_TO_LIBRE_CHAT_INFRA }}
           owner: BusinessFinland
-          repositories: aks-librechat-manifests
+          repositories: libre-chat-infra
           permission-actions: write
 
       - name: Dispatch the dev deploy
@@ -100,6 +100,6 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           IMAGE: ${{ needs.image.outputs.image }}
         run: |
-          gh workflow run librechat-manifests.yml -R BusinessFinland/aks-librechat-manifests \
+          gh workflow run librechat-manifests.yml -R BusinessFinland/libre-chat-infra \
             --ref dev -f environment=dev -f image="$IMAGE"
-          echo "Started the dev deploy of \`$IMAGE\` in aks-librechat-manifests" >> "$GITHUB_STEP_SUMMARY"
+          echo "Started the dev deploy of \`$IMAGE\` in libre-chat-infra" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,111 @@
+# Tests every pull request to main, the upstream autopilot's merge PRs
+# (upstream/librechat-*) above all: upstream's own backend and frontend unit
+# tests, as upstream's backend-review.yml and frontend-review.yml ran them at
+# our fork point, plus the image build the deployment uses.
+#
+# Read-only, no secrets: the test keys below are throwaway values the tests
+# need, not credentials for anything. Safe on a public repository's fork PRs.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tools:
+    name: upstream autopilot tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/upstream
+      - run: python3 -I tools/upstream/test_versions.py
+
+  backend:
+    name: backend unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NODE_ENV: CI
+      JWT_SECRET: ci-only-jwt-secret
+      CREDS_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      CREDS_IV: 00000000000000000000000000000000
+      BAN_VIOLATIONS: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build:data-provider
+      - run: npm run build:mcp
+      - run: npm run build:data-schemas
+      - name: Test fixtures
+        run: |
+          mkdir -p api/data && echo '{}' > api/data/auth.json
+          cp api/test/.env.test.example api/test/.env.test
+      - name: api
+        run: cd api && npm run test:ci
+      - name: data-provider
+        run: cd packages/data-provider && npm run test:ci
+      - name: mcp
+        run: cd packages/mcp && npm run test:ci
+
+  frontend:
+    name: frontend unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run frontend:ci
+      - name: client
+        run: cd client && npm run test:ci
+
+  image:
+    name: image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build (not pushed)
+        run: docker build --platform linux/amd64 -t librechat:ci .
+      - name: Starts and answers /health
+        run: |
+          # The server connects to MongoDB (and syncs its indexes) before it
+          # serves /health, so it gets a throwaway one. A crash on start (a
+          # missing module, a bad config, a failed migration) fails here.
+          docker network create ci
+          docker run -d --name mongo --network ci mongo:7
+          docker run -d --name lc --network ci -p 3080:3080 \
+            -e HOST=0.0.0.0 -e MONGO_URI=mongodb://mongo:27017/ci \
+            -e JWT_SECRET=ci -e JWT_REFRESH_SECRET=ci \
+            -e CREDS_KEY=0000000000000000000000000000000000000000000000000000000000000000 \
+            -e CREDS_IV=00000000000000000000000000000000 librechat:ci
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3080/health; then echo; exit 0; fi
+            sleep 2
+          done
+          docker logs lc | tail -100
+          exit 1

@@ -30,5 +30,24 @@ the personalisations.
    - In case of removed files (such as workflows etc.) use your own judgment. If they were removed earlier, they are 
      likely not important now either
 6. Test the application in your local environment and see that all works as planned. Fix bugs caused by merge if needed.
-7. Commit the branch to origin and create a PR for co-worker to go through
-8. (Optional, but highly suggested) when merging the PR, use squash and merge to not completely destroy our git tree. 
+7. Set `"version"` in `.github/upstream.json` to the release you merged.
+8. Commit the branch to origin and create a PR for co-worker to go through
+9. Merge the PR with **"Create a merge commit"**, never squash. A squash leaves upstream's history out of `main`, so
+   git no longer knows the release was merged, and the next upgrade conflicts again on everything resolved here.
+
+<h3>Upstream autopilot</h3>
+
+`.github/workflows/upstream.yml` does the steps above for each new LibreChat release (modelled on Vimma's autopilot):
+it checks upstream daily, opens a tracking issue per release (labelled `security` when the release fixes a published
+advisory that affects our version), and merges the release into `main` on a branch. A clean merge becomes the PR
+`upstream/librechat-vX.Y.Z`, tested by CI. A merge with conflicts becomes a `triage` issue listing the files and the
+commands above. It also opens a drift issue and fails when we fall too far behind (`tools/upstream/detect.py`).
+
+`.github/upstream.json` records the release `main` is merged up to.
+
+For the PR to start CI on its own, the autopilot needs a GitHub App with contents, pull requests and issues write on
+this repository: set the repository variable `UPSTREAM_APP_CLIENT_ID` and the secret `UPSTREAM_APP_KEY`. Without
+them it opens the PR as a draft with `GITHUB_TOKEN`, and CI starts when someone pushes to the branch.
+
+Every file we change is a merge conflict on each upgrade. Prefer configuration (`librechat.yaml`, environment
+variables) or an upstream contribution over a code change, and keep the remaining changes small.

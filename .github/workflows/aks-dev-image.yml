@@ -1,0 +1,105 @@
+name: AKS dev image
+
+# Builds the LibreChat image once into the dev registry of the AKS platform
+# (crseckubedev), mirrors the third-party images it runs with, and starts the
+# dev deploy in BusinessFinland/aks-librechat-manifests. Test and prod promote
+# this same image by digest from there; nothing here touches them.
+#
+# This repository is public. The push signs in with GitHub OIDC as
+# libre-chat-app-image-push, a service principal with AcrPush on crseckubedev
+# and nothing else, whose federated credential trusts only this repository's
+# main branch: a fork's pull request can never get its token. Its ids are
+# repository variables (identifiers, not credentials). No registry password.
+#
+# The Container Apps deployment (azure-container-webapp.yml) is unchanged and
+# keeps serving test and prod until the AKS cutover.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: aks-dev-image
+  cancel-in-progress: false
+
+jobs:
+  image:
+    if: github.repository == 'BusinessFinland/libre-chat-app' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      REGISTRY: crseckubedev.azurecr.io
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.ACR_PUSH_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - run: az acr login --name "${REGISTRY%%.*}"
+
+      - name: Build and push
+        id: push
+        run: |
+          ref="$REGISTRY/librechat:$GITHUB_SHA"
+          docker build --platform linux/amd64 \
+            --label org.opencontainers.image.source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            -t "$ref" .
+          docker push "$ref"
+          echo "image=$ref" >> "$GITHUB_OUTPUT"
+          echo "Pushed \`$ref\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # Copies each manifest list as is (every platform, same digests), so the
+      # mirror is byte-for-byte the upstream image; a tag already present is
+      # copied again, which is a no-op for an unchanged digest.
+      - name: Mirror third-party images
+        run: |
+          grep -v '^\s*\(#\|$\)' .github/aks/mirror-images.txt | while read -r src dst; do
+            [[ $dst =~ ^[a-z0-9._/-]+:[A-Za-z0-9._-]+$ ]] || { echo "::error::bad mirror target '$dst'"; exit 1; }
+            docker buildx imagetools create --tag "$REGISTRY/mirror/$dst" "$src"
+            echo "Mirrored \`$src\` -> \`$REGISTRY/mirror/$dst\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  # Starts aks-librechat-manifests' librechat-manifests workflow on its dev
+  # branch with this image. Needs the librechatdeployment GitHub App installed
+  # on aks-librechat-manifests and the repository variable
+  # AKS_DEV_DEPLOY=true; until then deploy by hand with the image from the
+  # summary above.
+  deploy-dev:
+    needs: image
+    if: vars.AKS_DEV_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Token of the librechatdeployment App
+        id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: Iv23lifK2y13294UzuWb # librechatdeployment (app id 1295399)
+          private-key: ${{ secrets.PEM_TO_LIBRE_CHAT_INFRA }}
+          owner: BusinessFinland
+          repositories: aks-librechat-manifests
+          permission-actions: write
+
+      - name: Dispatch the dev deploy
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          IMAGE: ${{ needs.image.outputs.image }}
+        run: |
+          gh workflow run librechat-manifests.yml -R BusinessFinland/aks-librechat-manifests \
+            --ref dev -f environment=dev -f image="$IMAGE"
+          echo "Started the dev deploy of \`$IMAGE\` in aks-librechat-manifests" >> "$GITHUB_STEP_SUMMARY"

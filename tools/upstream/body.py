@@ -60,7 +60,7 @@ The autopilot merges {v} into `main` on a branch. A clean merge becomes a PR tha
 ## Review
 
 - The merge applied without conflicts, but our changes can still interact with upstream's. Read the release notes for **breaking changes**, especially:
-  - a new `librechat.yaml` `version`: update the config in the deployment (aks-librechat-manifests `librechat/manifests/base/librechat.yaml`; libre-chat-infra for Container Apps)
+  - a new `librechat.yaml` `version`: update the config in the deployment (libre-chat-infra: `librechat/manifests/base/librechat.yaml` for AKS, the root `librechat-<env>.yaml` for Container Apps)
   - new required environment variables
   - database migrations (`config/` scripts named in the notes)
 - CI runs the tests and the image build on this branch.{' This PR was opened with `GITHUB_TOKEN`, which starts no workflows: close and reopen it, or push an empty commit, to run CI. Setting up the upstream App (README "Upstream autopilot") removes this step.' if draft else ''}

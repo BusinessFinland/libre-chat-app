@@ -1,8 +1,10 @@
-# Third-party images LibreChat runs next to itself on AKS, copied into the dev
+# Third-party images LibreChat runs next to itself on AKS (node: the
+# foundry-proxy sidecar, libre-chat-infra librechat/manifests/base/foundry-proxy), copied into the dev
 # registry (crseckubedev) under mirror/ by .github/workflows/aks-dev-image.yml:
 # the cluster pulls only from its own registry. One per line:
 #   <source reference>  <name:tag under crseckubedev.azurecr.io/mirror/>
-# aks-librechat-manifests librechat/manifests/base pins the same tags; change
+# libre-chat-infra librechat/manifests/base pins the same tags; change
 # both together. The upstream autopilot bumps these with the LibreChat version.
 ghcr.io/danny-avila/librechat-rag-api-dev-lite:v0.5.0  librechat-rag-api-dev-lite:v0.5.0
 docker.io/getmeili/meilisearch:v1.12.3                  meilisearch:v1.12.3
+docker.io/library/node:22.23.5-alpine3.24              node:22.23.5-alpine3.24

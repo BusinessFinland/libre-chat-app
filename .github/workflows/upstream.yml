@@ -1,13 +1,13 @@
 # The upstream autopilot, after Vimma's (vimma-browser/vimma upstream.yml). When
-# LibreChat ships a release, above all a security release, it merges the
+# LibreChat ships a release, above all one that fixes an advisory affecting us, it merges the
 # release into main on a branch and opens a tested PR with no manual step; a
 # person reviews and merges. Where the merge conflicts, it opens a triage issue
 # instead, for a person or a coding agent.
 #
-#   detect        daily, < 1 min, read-only. Newer release (tags vX.Y.Z; upstream
-#                 marks every GitHub release a prerelease)? Fixes an advisory
-#                 that affects us (security)? Drift?
-#   track         a newer release: its tracking issue, labelled upstream (+ security).
+#   detect        daily, < 1 min. Newer release (tags vX.Y.Z; upstream marks
+#                 every GitHub release a prerelease)? Drift? Uploads the
+#                 upstream advisories that affect our version to code scanning.
+#   track         a newer release: its tracking issue, labelled upstream.
 #   merge-check   merge the release into main in a scratch checkout. Read-only.
 #   publish       clean: push upstream/librechat-vX.Y.Z (the merge plus the
 #                 .github/upstream.json bump) and open the PR; CI tests it.
@@ -22,6 +22,12 @@
 # the release's conflict issue is open, the release has been handled (rerun with
 # `gh workflow run upstream.yml -f rebuild=true`). Detection reads public
 # upstream data only. Never pull_request_target: nothing here runs PR code.
+#
+# This repository is public, and so are its issues, PRs and run logs. Which
+# advisories affect us goes only to code scanning (Security tab, tool
+# upstream-advisories), visible to people with write access: never into a job
+# output, an issue, a PR or a log line. Alerts close by themselves when an
+# upload no longer reports them, i.e. after the upgrade.
 name: upstream
 
 on:
@@ -41,7 +47,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  OWNER: JRanne # mentioned on security and drift issues
+  OWNER: JRanne # mentioned on tracking, conflict and drift issues
 
 jobs:
   detect:
@@ -51,10 +57,9 @@ jobs:
     permissions:
       contents: read # .github/upstream.json, tools/upstream; the branch lookup
       issues: read # the tracking and conflict issues
+      security-events: write # upload the upstream advisories to code scanning
     outputs:
       version: ${{ steps.detect.outputs.version }}
-      security: ${{ steps.detect.outputs.security }}
-      labels: ${{ steps.detect.outputs.labels }}
       drift: ${{ steps.detect.outputs.drift }}
       drift-line: ${{ steps.detect.outputs.drift-line }}
       detection: ${{ steps.detect.outputs.detection }}
@@ -74,7 +79,22 @@ jobs:
         id: detect
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 -I tools/upstream/detect.py --github-output "$GITHUB_OUTPUT" | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          python3 -I tools/upstream/detect.py --github-output "$GITHUB_OUTPUT" \
+            --sarif "$RUNNER_TEMP/upstream-advisories.sarif" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # On main only, so the alerts track the default branch. The file is
+      # read here and nowhere else: it never reaches a log or an output.
+      - name: Upload the advisories that affect us to code scanning
+        if: steps.detect.outputs.sarif == 'yes' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gzip -c "$RUNNER_TEMP/upstream-advisories.sarif" | base64 -w0 > "$RUNNER_TEMP/sarif.b64"
+          gh api "repos/$GITHUB_REPOSITORY/code-scanning/sarifs" --silent \
+            -f commit_sha="$GITHUB_SHA" -f ref="$GITHUB_REF" -F sarif=@"$RUNNER_TEMP/sarif.b64" \
+            -f tool_name=upstream-advisories
+          echo "Uploaded to code scanning (Security tab, tool upstream-advisories)." >> "$GITHUB_STEP_SUMMARY"
 
       - name: What is already done for this release
         id: state
@@ -82,7 +102,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.detect.outputs.version }}
-          SECURITY: ${{ steps.detect.outputs.security }}
           REBUILD: ${{ inputs.rebuild || false }}
         run: |
           branch="upstream/librechat-$VERSION"
@@ -98,15 +117,10 @@ jobs:
           fi
           title="LibreChat $VERSION released"
           issue=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --label upstream \
-            --search "\"$title\" in:title" --json number,title,labels \
+            --search "\"$title\" in:title" --json number,title \
             --jq "[.[] | select(.title == \"$title\")][0]")
           number=$(jq -r '.number // empty' <<< "${issue:-null}")
-          has_security=$(jq -r '[.labels[]?.name] | index("security") != null' <<< "${issue:-null}")
-          if [ -z "$number" ] || { [ "$SECURITY" != false ] && [ "$has_security" != true ]; }; then
-            track=true
-          else
-            track=false
-          fi
+          track=$([ -z "$number" ] && echo true || echo false)
           { echo "merge=$merge"; echo "issue=$number"; echo "track=$track"; } >> "$GITHUB_OUTPUT"
           echo "Branch $branch: merge=$merge; tracking issue: ${number:-none} (track=$track); conflict issue: ${conflict:-none}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
@@ -118,7 +132,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      issues: write # create or label the tracking issue
+      issues: write # create the tracking issue
     outputs:
       issue: ${{ steps.issue.outputs.issue }}
     steps:
@@ -127,28 +141,19 @@ jobs:
           persist-credentials: false
           sparse-checkout: tools/upstream
 
-      - name: Open or label the tracking issue
+      - name: Open the tracking issue
         id: issue
         env:
           GH_TOKEN: ${{ github.token }}
           DETECTION: ${{ needs.detect.outputs.detection }}
-          LABELS: ${{ needs.detect.outputs.labels }}
-          ISSUE: ${{ needs.detect.outputs.issue }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           printf '%s' "$DETECTION" > "$RUNNER_TEMP/detection.json"
           gh label create upstream --color 1D76DB --description "LibreChat upstream release" --force
-          gh label create security --color B60205 --description "Security: act within days" --force
           body() { python3 -I tools/upstream/body.py "$@" --detection "$RUNNER_TEMP/detection.json" --run-url "$RUN_URL" --owner "$OWNER"; }
           body issue > "$RUNNER_TEMP/issue.md"
-          if [ -z "$ISSUE" ]; then
-            url=$(gh issue create --title "$(body issue-title)" --label "$LABELS" --body-file "$RUNNER_TEMP/issue.md")
-            ISSUE=${url##*/}
-          else
-            gh issue edit "$ISSUE" --add-label "$LABELS" --body-file "$RUNNER_TEMP/issue.md"
-            gh issue comment "$ISSUE" --body "@$OWNER an advisory now covers this release: labelled \`security\` ([run]($RUN_URL))."
-          fi
-          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+          url=$(gh issue create --title "$(body issue-title)" --label upstream --body-file "$RUNNER_TEMP/issue.md")
+          echo "issue=${url##*/}" >> "$GITHUB_OUTPUT"
 
   merge-check:
     needs: detect
@@ -210,7 +215,7 @@ jobs:
       issues: write # labels; superseded tracking issues
     env:
       VERSION: ${{ needs.detect.outputs.version }}
-      LABELS: ${{ needs.detect.outputs.labels }}
+      LABELS: upstream
       ISSUE: ${{ needs.track.outputs.issue || needs.detect.outputs.issue }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
@@ -266,7 +271,6 @@ jobs:
           body pr > "$RUNNER_TEMP/pr.md"
           title=$(body pr-title)
           gh label create upstream --color 1D76DB --description "LibreChat upstream release" --force
-          gh label create security --color B60205 --description "Security: act within days" --force
           existing=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh pr edit "$existing" --title "$title" --body-file "$RUNNER_TEMP/pr.md" --add-label "$LABELS"
@@ -310,7 +314,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DETECTION: ${{ needs.detect.outputs.detection }}
-          LABELS: ${{ needs.detect.outputs.labels }}
           ISSUE: ${{ needs.track.outputs.issue || needs.detect.outputs.issue }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -326,7 +329,7 @@ jobs:
           if [ -n "$n" ]; then
             gh issue edit "$n" --body-file "$RUNNER_TEMP/conflict.md"
           else
-            url=$(gh issue create --title "$title" --label "$LABELS" --label triage --body-file "$RUNNER_TEMP/conflict.md")
+            url=$(gh issue create --title "$title" --label upstream --label triage --body-file "$RUNNER_TEMP/conflict.md")
             n=${url##*/}
             [ -z "$ISSUE" ] || gh issue comment "$ISSUE" --body "The merge conflicts: #$n ([run]($RUN_URL))."
           fi
@@ -355,12 +358,12 @@ jobs:
           printf '%s' "$DETECTION" > "$RUNNER_TEMP/detection.json"
           body() { python3 -I tools/upstream/body.py "$@" --detection "$RUNNER_TEMP/detection.json" --run-url "$RUN_URL" --owner "$OWNER"; }
           title=$(body drift-title)
-          gh label create security --color B60205 --description "Security: act within days" --force
-          open=$(gh issue list --state open --label security --search "\"$title\" in:title" --json number,title \
+          gh label create upstream --color 1D76DB --description "LibreChat upstream release" --force
+          open=$(gh issue list --state open --label upstream --search "\"$title\" in:title" --json number,title \
             --jq "[.[] | select(.title == \"$title\")][0].number // empty")
           if [ -z "$open" ]; then
             body drift > "$RUNNER_TEMP/drift.md"
-            gh issue create --title "$title" --label security --body-file "$RUNNER_TEMP/drift.md"
+            gh issue create --title "$title" --label upstream --body-file "$RUNNER_TEMP/drift.md"
           fi
           echo "::error::$DRIFT_LINE"
           exit 1

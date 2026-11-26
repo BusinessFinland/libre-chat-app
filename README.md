@@ -38,8 +38,10 @@ the personalisations.
 <h3>Upstream autopilot</h3>
 
 `.github/workflows/upstream.yml` does the steps above for each new LibreChat release (modelled on Vimma's autopilot):
-it checks upstream daily, opens a tracking issue per release (labelled `security` when the release fixes a published
-advisory that affects our version), and merges the release into `main` on a branch. A clean merge becomes the PR
+it checks upstream daily, opens a tracking issue per release, and merges the release into `main` on a branch.
+Upstream security advisories that affect our version go only to the **Security** tab (code scanning, tool
+`upstream-advisories`, visible to people with write access), never to the public issues, PRs or logs; each alert closes
+by itself once an upgrade fixes it. A clean merge becomes the PR
 `upstream/librechat-vX.Y.Z`, tested by CI. A merge with conflicts becomes a `triage` issue listing the files and the
 commands above. It also opens a drift issue and fails when we fall too far behind (`tools/upstream/detect.py`).
 
